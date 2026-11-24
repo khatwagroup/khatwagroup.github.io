@@ -3106,13 +3106,26 @@ function pendUI(){if(mode!=='cloud')return;const n=Object.keys(FAILS).length;
   if(PEND>0)setStatus('⏳ جاري الحفظ ('+PEND+')… ماتقفلش الصفحة',true);
   else if(n){setStatus('⚠️ فيه '+n+' تعديل مااتحفظش — دوس هنا',true);const s=$('#status');s.style.cursor='pointer';s.onclick=failModal}
   else if(SYNCED){setStatus('✓ كل التعديلات اتحفظت أونلاين');const s=$('#status');s.onclick=null;s.style.cursor=''}}
+function cleanU(v){if(Array.isArray(v))return v.map(x=>x===undefined?null:cleanU(x));if(v&&typeof v==='object'&&!(v instanceof Date)){const o={};for(const k in v){if(v[k]!==undefined&&typeof v[k]!=='function')o[k]=cleanU(v[k])}return o}if(typeof v==='number'&&!isFinite(v))return 0;return v}
 async function cloudWrite(op,c,id,obj,k){
   k=k||obxAdd({op,c,id,obj,ts:Date.now()});PEND++;pendUI();
-  try{const ref=DB.collection(c).doc(id);await (op==='set'?ref.set(obj):ref.delete());obxDel(k);delete FAILS[k];return true}
+  try{const ref=DB.collection(c).doc(id);await (op==='set'?ref.set(cleanU(obj)):ref.delete());obxDel(k);delete FAILS[k];return true}
   catch(e){FAILS[k]={op,c,id,obj,err:errAr(e)};toast('⚠️ مااتحفظش: '+errAr(e));return false}
   finally{PEND--;pendUI()}
 }
-async function obxReplay(){const o=obxGet(),ks=Object.keys(o).sort((a,b)=>(o[a].ts||0)-(o[b].ts||0));for(const k of ks){const e=o[k];await cloudWrite(e.op,e.c,e.id,e.obj,k)}if(ks.length)toast('اتحفظت '+ks.length+' تعديلات كانت مستنية')}
+function obxDesc(e){const o=e.obj||{};let t=(COL_N[e.c]||e.c)+' — '+(e.op==='set'?'حفظ':'حذف');
+  if(e.c==='dist')t+=` · ${fmt(o.amount||0)}${o.note?' — '+esc(o.note):''}<div class="muted">${Object.entries(o.shares||{}).map(([k,v])=>esc(ptName(k))+' '+fmt(v)).join(' · ')}${o.toCap?' · رجع تمويل':''}${o.date?' · بتاريخ '+dmy(o.date):''}</div>`;
+  else t+=' · '+esc(logSum(e.c,o))+(o.date?' <span class="muted">('+dmy(o.date)+')</span>':'');
+  return t+`<div class="muted" style="font-size:11px">اتعمل ${new Date(e.ts||0).toLocaleString('ar-EG')}</div>`}
+async function obxReplay(){const o=obxGet(),ks=Object.keys(o).sort((a,b)=>(o[a].ts||0)-(o[b].ts||0));if(!ks.length)return;
+  const exists=k=>{const e=o[k];return e.op==='set'&&S[e.c]&&S[e.c][e.id]&&JSON.stringify(S[e.c][e.id])===JSON.stringify(cleanU(e.obj))};
+  const todo=ks.filter(k=>!exists(k));ks.filter(exists).forEach(obxDel);if(!todo.length)return;
+  openModal(`<h2>📌 فيه ${todo.length} تعديل مااتحفظوش قبل كده</h2><p>دول تعديلات اتعملت على الجهاز ده وماوصلتش لقاعدة البيانات. <b>علّم على اللي عايز تحفظه بس</b> — لو كنت دخّلت حاجة منهم تاني بإيدك شيل العلامة من عليها عشان ماتتكررش.</p>
+  <div class="list" style="max-height:52vh;overflow:auto">${todo.map(k=>`<label class="it" style="cursor:pointer;align-items:flex-start;gap:10px"><input type="checkbox" class="ob_k" value="${k}" checked style="width:auto;margin-top:4px"><span style="flex:1">${obxDesc(o[k])}</span></label>`).join('')}</div>
+  <div class="acts"><button class="btn p" id="obGo">احفظ المحدد</button><button class="btn r" id="obDrop">امسحهم كلهم</button><button class="btn" onclick="closeModal()">بعدين</button></div>`,true);
+  $('#obGo').onclick=async()=>{const sel=[...document.querySelectorAll('.ob_k')],on=sel.filter(x=>x.checked).map(x=>x.value);sel.filter(x=>!x.checked).forEach(x=>obxDel(x.value));closeModal();for(const k of on){const e=o[k];await cloudWrite(e.op,e.c,e.id,e.obj,k)}toast('اتحفظ '+on.length+' تعديل')};
+  $('#obDrop').onclick=()=>confirmBox('تمسح التعديلات دي نهائي؟',()=>{todo.forEach(obxDel);FAILS={};pendUI();closeModal();toast('اتمسحوا')},'مسح');
+}
 function failModal(){const l=Object.entries(FAILS);if(!l.length)return;openModal(`<h2>⚠️ تعديلات مااتحفظتش</h2><p class="muted">التعديلات دي اتعملت بس ماوصلتش لقاعدة البيانات. دوس «حاول تاني» — ولو النت فاصل استنى لما يرجع.</p><div class="list">${l.map(([k,f])=>`<div class="it"><span>${esc(COL_N[f.c]||f.c)} — ${f.op==='set'?'حفظ':'حذف'} <span class="muted">${esc(logSum(f.c,f.obj||{}))}</span></span><span class="neg">${esc(f.err)}</span></div>`).join('')}</div><div class="acts"><button class="btn p" onclick="closeModal();retryFails()">حاول تاني</button><button class="btn" onclick="closeModal()">إغلاق</button></div>`)}
 async function retryFails(){const l=Object.entries(FAILS);for(const [k,f] of l){delete FAILS[k];await cloudWrite(f.op,f.c,f.id,f.obj,k)}}
 window.addEventListener('beforeunload',e=>{if(PEND>0){e.preventDefault();e.returnValue='لسه فيه تعديلات بتتحفظ'}});
